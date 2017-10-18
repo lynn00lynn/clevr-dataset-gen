@@ -9,18 +9,21 @@ from __future__ import print_function
 import math, sys, random, argparse, json, os, tempfile
 from datetime import datetime as dt
 from collections import Counter
-from copy import deepcopy
 import numpy as np
-import re
+
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
 nonintersecting but may partially occlude each other. Output images will be
 written to disk as PNGs, and we will also write a JSON file for each image with
 ground-truth scene information.
+
 This file expects to be run from Blender like this:
+
 blender --background --python render_images.py -- [arguments to this script]
 """
+# TODO: use "todo" only to highlight changes made (Ting Gu)
+# TODO: use global variable MAKEPAIRS to produce pictures in pairs while keeping the original logic
 MAKEPAIRS = True
 INSIDE_BLENDER = True
 try:
@@ -103,7 +106,7 @@ parser.add_argument('--output_scene_dir', default='../output/scenes/',
                          "It will be created if it does not exist.")
 parser.add_argument('--output_scene_file', default='../output/CLEVR_scenes.json',
                     help="Path to write a single JSON file containing all scene information")
-parser.add_argument('--output_blend_dir', default='../output/blendfiles',
+parser.add_argument('--output_blend_dir', default='output/blendfiles',
                     help="The directory where blender scene files will be stored, if the " +
                          "user requested that these files be saved using the " +
                          "--save_blendfiles flag; in this case it will be created if it does " +
@@ -176,39 +179,23 @@ def main(args):
         scene_path = scene_template % (i + args.start_idx)
         # TODO: append two entries for path if making pairs
         if MAKEPAIRS:
-          all_scene_paths.append(re.sub(".json", "_a.json", scene_path))
-          all_scene_paths.append(re.sub(".json", "_b.json", scene_path))
+            all_scene_paths.append(scene_path + "_a")
+            all_scene_paths.append(scene_path + "_b")
         else:
-          all_scene_paths.append(scene_path)
+            all_scene_paths.append(scene_path)
         blend_path = None
         if args.save_blendfiles == 1:
             blend_path = blend_template % (i + args.start_idx)
-            print ("save blend file")
-            print (blend_path)
         num_objects = random.randint(args.min_objects, args.max_objects)
-        # TODO: new function
-        pass_a = False
-        pass_b = False
-        while not pass_a or not pass_b:
-          parameters_a, parameters_b = gen_parameters(num_objects, args)
-          pass_a = render_scene(args,
+        # TODO: need to edit render_scene() to produce 2 pictures a time
+        render_scene(args,
                      num_objects=num_objects,
                      output_index=(i + args.start_idx),
                      output_split=args.split,
-                     output_image=re.sub(".png", "_a.png", img_path),
-                     output_scene=re.sub(".json", "_a.json", scene_path),
+                     output_image=img_path,
+                     output_scene=scene_path,
                      output_blendfile=blend_path,
-                     parameters=parameters_a)
-          if not pass_a:
-            continue
-          pass_b = render_scene(args,
-                 num_objects=num_objects,
-                 output_index=(i + args.start_idx),
-                 output_split=args.split,
-                 output_image=re.sub(".png", "_b.png", img_path),
-                 output_scene=re.sub(".json", "_b.json", scene_path),
-                 output_blendfile=blend_path,
-                 parameters=parameters_b)
+                     )
 
     # After rendering all images, combine the JSON files for each scene into a
     # single JSON file.
@@ -236,13 +223,7 @@ def render_scene(args,
                  output_image='render.png',
                  output_scene='render_json',
                  output_blendfile=None,
-                 parameters=[]):
-
-    # TODO: reorganize this function to separate randomization and generation
-    # TODO: 1) generate values for a, b
-    # TODO: 2) create images a, b
-
-
+                 ):
     # Load the main blendfile
     bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
 
@@ -295,9 +276,9 @@ def render_scene(args,
         return 2.0 * L * (random.random() - 0.5)
 
     # Add random jitter to camera position
-    # if args.camera_jitter > 0:
-    #     for i in range(3):
-    #         bpy.data.objects['Camera'].location[i] += rand(args.camera_jitter)
+    if args.camera_jitter > 0:
+        for i in range(3):
+            bpy.data.objects['Camera'].location[i] += rand(args.camera_jitter)
 
     # Figure out the left, up, and behind directions along the plane and record
     # them in the scene structure
@@ -323,21 +304,23 @@ def render_scene(args,
     scene_struct['directions']['below'] = tuple(-plane_up)
 
     # Add random jitter to lamp positions
-    # TODO: not using random jitter
-    # if args.key_light_jitter > 0:
-    #     for i in range(3):
-    #         bpy.data.objects['Lamp_Key'].location[i] += rand(args.key_light_jitter)
-    # if args.back_light_jitter > 0:
-    #     for i in range(3):
-    #         bpy.data.objects['Lamp_Back'].location[i] += rand(args.back_light_jitter)
-    # if args.fill_light_jitter > 0:
-    #     for i in range(3):
-    #         bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
+    if args.key_light_jitter > 0:
+        for i in range(3):
+            bpy.data.objects['Lamp_Key'].location[i] += rand(args.key_light_jitter)
+    if args.back_light_jitter > 0:
+        for i in range(3):
+            bpy.data.objects['Lamp_Back'].location[i] += rand(args.back_light_jitter)
+    if args.fill_light_jitter > 0:
+        for i in range(3):
+            bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
 
     # Now make some random objects
-    objects, blender_objects, Good = add_random_objects(scene_struct, parameters, args, camera)
-    if not Good:
-      return False
+    if MAKEPAIRS:
+        objects, blender_objects, objects_b, blender_objects_b = add_random_objects(scene_struct, num_objects, args,
+                                                                                    camera)
+    else:
+        objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+
     # Render the scene and dump the scene data structure
     scene_struct['objects'] = objects
     scene_struct['relationships'] = compute_all_relationships(scene_struct)
@@ -348,231 +331,376 @@ def render_scene(args,
         except Exception as e:
             print(e)
 
-    with open(output_scene, 'w') as f:
-        json.dump(scene_struct, f, indent=2)
+    if MAKEPAIRS:  # if makepairs, render a first
+        with open(output_scene + "_a", 'w') as f:
+            json.dump(scene_struct, f, indent=2)
+    else:
+        with open(output_scene, 'w') as f:
+            json.dump(scene_struct, f, indent=2)
 
-
-    if output_blendfile is not None:
-    #TODO: not creating blendfile
+    if output_blendfile is not None:  # not going to edit this since we are not saving image
         bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
 
-    return True
+    if MAKEPAIRS:  # now it's time to deal with b
+        # TODO: deal with b
+        # Load the main blendfile
+        bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
 
-def gen_parameters(num_objects, args):
+        # Load materials
+        # utils.load_materials(args.material_dir)
 
-    # Load the property file
-    with open(args.properties_json, 'r') as f:
-        properties = json.load(f)
-        color_name_to_rgba = {}
-        for name, rgb in properties['colors'].items():
-            rgba = [float(c) / 255.0 for c in rgb] + [1.0]
-            color_name_to_rgba[name] = rgba
-        material_mapping = [(v, k) for k, v in properties['materials'].items()]
-        object_mapping = [(v, k) for k, v in properties['shapes'].items()]
-        size_mapping = list(properties['sizes'].items())
+        # Set render arguments so we can get pixel coordinates later.
+        # We use functionality specific to the CYCLES renderer so BLENDER_RENDER
+        # cannot be used.
+        render_args = bpy.context.scene.render
+        render_args.engine = "CYCLES"
+        render_args.filepath = output_image
+        render_args.resolution_x = args.width
+        render_args.resolution_y = args.height
+        render_args.resolution_percentage = 100
+        render_args.tile_x = args.render_tile_size
+        render_args.tile_y = args.render_tile_size
 
-    # TODO: not using shape color combos for now
-    # shape_color_combos = None
-    # if args.shape_color_combos_json is not None:
-    #     with open(args.shape_color_combos_json, 'r') as f:
-    #         shape_color_combos = list(json.load(f).items())
-    i = 0
-    parameters = []
-    while i < num_objects:
+        if args.use_gpu == 1:
+            # Blender changed the API for enabling CUDA at some point
+            if bpy.app.version < (2, 78, 0):
+                bpy.context.user_preferences.system.compute_device_type = 'CUDA'
+                bpy.context.user_preferences.system.compute_device = 'CUDA_0'
+            else:
+                cycles_prefs = bpy.context.user_preferences.addons['cycles'].preferences
+                cycles_prefs.compute_device_type = 'CUDA'
 
-      size_name, r = random.choice(size_mapping)
-      x = random.uniform(-3, 3)
-      y = random.uniform(-3, 3)
+        # Some CYCLES-specific stuff
+        bpy.data.worlds['World'].cycles.sample_as_light = True
+        bpy.context.scene.cycles.blur_glossy = 2.0
+        bpy.context.scene.cycles.samples = args.render_num_samples
+        bpy.context.scene.cycles.transparent_min_bounces = args.render_min_bounces
+        bpy.context.scene.cycles.transparent_max_bounces = args.render_max_bounces
+        if args.use_gpu == 1:
+            bpy.context.scene.cycles.device = 'GPU'
 
-      for pre_obj in parameters:
-        xx, yy, rr = pre_obj["position"]
-        dx, dy = x - xx, y - yy
-        dist = math.sqrt(dx * dx + dy * dy)
-        if dist - r - rr < args.min_dist:
-          next
+        # This will give ground-truth information about the scene and its objects
+        scene_struct = {
+            'split': output_split,
+            'image_index': output_index,
+            'image_filename': os.path.basename(output_image),
+            'objects': [],
+            'directions': {},
+        }
 
-      obj_name, obj_name_out = random.choice(object_mapping)  #shape
-      color_name, rgba = random.choice(list(color_name_to_rgba.items()))  #color
-      if obj_name == 'Cube':
-        r /= math.sqrt(2)
-      mat_name, mat_name_out = random.choice(material_mapping) #material
-      theta = 360.0 * random.random()
+        # Put a plane on the ground so we can compute cardinal directions
+        bpy.ops.mesh.primitive_plane_add(radius=5)
+        plane = bpy.context.object
 
-      obj = {"size_name":size_name, "position":[x,y,r], "obj_name":obj_name, "obj_name_out":obj_name_out,
-             "color_name":color_name, "rgba":rgba, "mat_name":mat_name, "mat_name_out":mat_name_out, "theta":theta}
-      parameters.append(obj)
-      i += 1
+        # Add random jitter to camera position
+        if args.camera_jitter > 0:
+            for i in range(3):
+                bpy.data.objects['Camera'].location[i] += rand(args.camera_jitter)
 
-    parameters_b = deepcopy(parameters)
-    #mutate
-    mutate_obj = random.randint(0, num_objects-1) #random.randint is inclusive both sides
-    mutate_aspect = random.choice(["shape", "color", "material"])
-    
-    if mutate_aspect == "shape":
-      obj_name_b, obj_name_out_b = random.choice(object_mapping)  # shape
-      while obj_name_b == parameters_b[mutate_obj]["obj_name"]:
-        obj_name_b, obj_name_out_b = random.choice(object_mapping)
-      parameters_b[mutate_obj]["obj_name"], parameters_b[mutate_obj]["obj_name_out"] = obj_name_b, obj_name_out_b
-    
-    elif mutate_aspect == "color":
-      color_name_b, rgba_b = random.choice(list(color_name_to_rgba.items()))
-      while color_name_b == parameters_b[mutate_obj]["color_name"]:
-        color_name_b, rgba_b = random.choice(list(color_name_to_rgba.items()))
-      parameters_b[mutate_obj]["color_name"], parameters_b[mutate_obj]["rgba"] = color_name_b, rgba_b
+        # Figure out the left, up, and behind directions along the plane and record
+        # them in the scene structure
+        camera = bpy.data.objects['Camera']
+        plane_normal = plane.data.vertices[0].normal
+        cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
+        cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
+        cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
+        plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
+        plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
+        plane_up = cam_up.project(plane_normal).normalized()
 
-    elif mutate_aspect == "material":
-      mat_name_b, mat_name_out_b = random.choice(material_mapping)
-      while mat_name_b == parameters_b[mutate_obj]["mat_name"]:
-        mat_name_b, mat_name_out_b = random.choice(material_mapping)
-      parameters_b[mutate_obj]["mat_name"], parameters_b[mutate_obj]["mat_name_out"] = mat_name_b, mat_name_out_b
+        # Delete the plane; we only used it for normals anyway. The base scene file
+        # contains the actual ground plane.
+        utils.delete_object(plane)
 
-    return parameters, parameters_b
+        # Save all six axis-aligned directions in the scene struct
+        scene_struct['directions']['behind'] = tuple(plane_behind)
+        scene_struct['directions']['front'] = tuple(-plane_behind)
+        scene_struct['directions']['left'] = tuple(plane_left)
+        scene_struct['directions']['right'] = tuple(-plane_left)
+        scene_struct['directions']['above'] = tuple(plane_up)
+        scene_struct['directions']['below'] = tuple(-plane_up)
 
+        # Add random jitter to lamp positions
+        if args.key_light_jitter > 0:
+            for i in range(3):
+                bpy.data.objects['Lamp_Key'].location[i] += rand(args.key_light_jitter)
+        if args.back_light_jitter > 0:
+            for i in range(3):
+                bpy.data.objects['Lamp_Back'].location[i] += rand(args.back_light_jitter)
+        if args.fill_light_jitter > 0:
+            for i in range(3):
+                bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
 
-def add_random_objects(scene_struct, parameters, args, camera):
-    """
-  Add random objects to the current blender scene
-  """
-    #TODO: changed sigature, num_objects changed to parameters
-    # Load the property file
-    with open(args.properties_json, 'r') as f:
-        properties = json.load(f)
-        color_name_to_rgba = {}
-        for name, rgb in properties['colors'].items():
-            rgba = [float(c) / 255.0 for c in rgb] + [1.0]
-            color_name_to_rgba[name] = rgba
-        material_mapping = [(v, k) for k, v in properties['materials'].items()]
-        object_mapping = [(v, k) for k, v in properties['shapes'].items()]
-        size_mapping = list(properties['sizes'].items())
-
-    # shape_color_combos = None
-    # if args.shape_color_combos_json is not None:
-    #     with open(args.shape_color_combos_json, 'r') as f:
-    #         shape_color_combos = list(json.load(f).items())
-
-    positions = []
-    objects = []
-    blender_objects = []
-
-    for i in range(len(parameters)):
-        # # Choose a random size
-        # size_name, r = random.choice(size_mapping)
-        #
-        # # Try to place the object, ensuring that we don't intersect any existing
-        # # objects and that we are more than the desired margin away from all existing
-        # # objects along all cardinal directions.
-        # num_tries = 0
-        # while True:
-        #     # If we try and fail to place an object too many times, then delete all
-        #     # the objects in the scene and start over.
-        #     num_tries += 1
-        #     if num_tries > args.max_retries:
-        #         for obj in blender_objects:
-        #             utils.delete_object(obj)
-        #         return add_random_objects(scene_struct, num_objects, args, camera)
-        #     x = random.uniform(-3, 3)
-        #     y = random.uniform(-3, 3)
-        #     # Check to make sure the new object is further than min_dist from all
-        #     # other objects, and further than margin along the four cardinal directions
-        #     dists_good = True
-        #     margins_good = True
-        #     for (xx, yy, rr) in positions:
-        #         dx, dy = x - xx, y - yy
-        #         dist = math.sqrt(dx * dx + dy * dy)
-        #         if dist - r - rr < args.min_dist:
-        #             dists_good = False
-        #             break
-        #         for direction_name in ['left', 'right', 'front', 'behind']:
-        #             direction_vec = scene_struct['directions'][direction_name]
-        #             assert direction_vec[2] == 0
-        #             margin = dx * direction_vec[0] + dy * direction_vec[1]
-        #             if 0 < margin < args.margin:
-        #                 print(margin, args.margin, direction_name)
-        #                 print('BROKEN MARGIN!')
-        #                 margins_good = False
-        #                 break
-        #         if not margins_good:
-        #             break
-        #
-        #     if dists_good and margins_good:
-        #         break
-        #
-        # # Choose random color and shape
-        # if shape_color_combos is None:
-        #     obj_name, obj_name_out = random.choice(object_mapping)
-        #     color_name, rgba = random.choice(list(color_name_to_rgba.items()))
+        # Now make some random objects
+        # if MAKEPAIRS:
+        #   objects, blender_objects, objects_b, blender_objects_b = add_random_objects(scene_struct, num_objects, args,
+        #                                                                               camera)
         # else:
-        #     obj_name_out, color_choices = random.choice(shape_color_combos)
-        #     color_name = random.choice(color_choices)
-        #     obj_name = [k for k, v in object_mapping if v == obj_name_out][0]
-        #     rgba = color_name_to_rgba[color_name]
-        #
-        # # For cube, adjust the size a bit
-        # if obj_name == 'Cube':
-        #     r /= math.sqrt(2)
-        objct = parameters[i]
-        size_name = objct["size_name"]
-        x, y, r = objct["position"]
-        obj_name = objct["obj_name"]
-        obj_name_out = objct["obj_name_out"]
-        color_name = objct["color_name"]
-        rgba = objct["rgba"]
-        mat_name = objct["mat_name"]
-        mat_name_out = objct["mat_name_out"]
-        theta = objct["theta"]
+        #   objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+
+        # Render the scene and dump the scene data structure
+        scene_struct['objects'] = objects_b
+        scene_struct['relationships'] = compute_all_relationships(scene_struct)
+        while True:
+            try:
+                bpy.ops.render.render(write_still=True)
+                break
+            except Exception as e:
+                print(e)
+
+        if MAKEPAIRS:  # if makepairs, render a first
+            with open(output_scene + "_b", 'w') as f:
+                json.dump(scene_struct, f, indent=2)
+        else:
+            with open(output_scene, 'w') as f:
+                json.dump(scene_struct, f, indent=2)
+
+        if output_blendfile is not None:  # not going to edit this since we are not saving image
+            bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
 
 
-        # obj = {"size_name": size_name, "position": [x, y, y], "obj_name": obj_name, "obj_name_out": obj_name_out,
-        #        "color_name": color_name, "rgba": rgba, "mat_name": mat_name, "mat_name_out": mat_name_out}
+def add_random_objects(scene_struct, num_objects, args, camera):
+    """
+    Add random objects to the current blender scene
+    """
+    # TODO: randomly choose an object to make a random modification(Ting Gu)
+    mutate_object = random.randint(0, num_objects)
+    mutate_aspect = random.choice(["color", "shape", "material"])
+    # Load the property file
+    with open(args.properties_json, 'r') as f:
+        properties = json.load(f)
+        color_name_to_rgba = {}
+        for name, rgb in properties['colors'].items():
+            rgba = [float(c) / 255.0 for c in rgb] + [1.0]
+            color_name_to_rgba[name] = rgba
+        material_mapping = [(v, k) for k, v in properties['materials'].items()]
+        object_mapping = [(v, k) for k, v in properties['shapes'].items()]
+        size_mapping = list(properties['sizes'].items())
+
+    shape_color_combos = None
+    if args.shape_color_combos_json is not None:
+        with open(args.shape_color_combos_json, 'r') as f:
+            shape_color_combos = list(json.load(f).items())
+
+    # TODO: if making pairs, create two copies
+    if MAKEPAIRS:
+        positions_a = []
+        objects_a = []
+        blender_objects_a = []
+        positions_b = []
+        objects_b = []
+        blender_objects_b = []
+    else:
+        positions = []
+        objects = []
+        blender_objects = []
+
+    for i in range(num_objects):
+        # TODO: keep size unchanged
+        # Choose a random size
+        size_name, r = random.choice(size_mapping)
+        # TODO: for r adjustment as cube
+        if MAKEPAIRS:
+            r_a = r
+            r_b = r
+
+        # Try to place the object, ensuring that we don't intersect any existing
+        # objects and that we are more than the desired margin away from all existing
+        # objects along all cardinal directions.
+        num_tries = 0
+        # TODO: keep location unchanged
+        while True:
+            # If we try and fail to place an object too many times, then delete all
+            # the objects in the scene and start over.
+            num_tries += 1
+            if num_tries > args.max_retries:
+                for obj in blender_objects:
+                    utils.delete_object(obj)
+                return add_random_objects(scene_struct, num_objects, args, camera)
+            x = random.uniform(-3, 3)
+            y = random.uniform(-3, 3)
+            # Check to make sure the new object is further than min_dist from all
+            # other objects, and further than margin along the four cardinal directions
+            dists_good = True
+            margins_good = True
+            if MAKEPAIRS:
+                positions = positions_a
+            for (xx, yy, rr) in positions:
+                dx, dy = x - xx, y - yy
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist - r - rr < args.min_dist:
+                    dists_good = False
+                    break
+                for direction_name in ['left', 'right', 'front', 'behind']:
+                    direction_vec = scene_struct['directions'][direction_name]
+                    assert direction_vec[2] == 0
+                    margin = dx * direction_vec[0] + dy * direction_vec[1]
+                    if 0 < margin < args.margin:
+                        print(margin, args.margin, direction_name)
+                        print('BROKEN MARGIN!')
+                        margins_good = False
+                        break
+                if not margins_good:
+                    break
+
+            if dists_good and margins_good:
+                break
+        # random.choice(["color", "shape", "material"])
+
+        if MAKEPAIRS == False:
+            # Choose random color and shape
+            if shape_color_combos is None:
+                obj_name, obj_name_out = random.choice(object_mapping)
+                color_name, rgba = random.choice(list(color_name_to_rgba.items()))
+            else:
+                obj_name_out, color_choices = random.choice(shape_color_combos)
+                color_name = random.choice(color_choices)
+                obj_name = [k for k, v in object_mapping if v == obj_name_out][0]
+                rgba = color_name_to_rgba[color_name]
+        else:  # MAKEPAIR = True
+            if i != mutate_object:  # use same value for color and shape for both objects
+                if shape_color_combos is None:
+                    obj_name, obj_name_out = random.choice(object_mapping)
+                    color_name, rgba = random.choice(list(color_name_to_rgba.items()))
+                else:
+                    obj_name_out, color_choices = random.choice(shape_color_combos)
+                    color_name = random.choice(color_choices)
+                    obj_name = [k for k, v in object_mapping if v == obj_name_out][0]
+                    rgba = color_name_to_rgba[color_name]
+                # use same value
+                obj_name_a = obj_name
+                obj_name_b = obj_name
+                obj_name_out_a = obj_name_out
+                obj_name_out_b = obj_name_out
+                color_name_a = color_name
+                color_name_b = color_name
+                rgba_a = rgba
+                rgba_b = rgba
+            else:  # if it is the object we want to mutate
+                if shape_color_combos is None:  # not implementing the other branch for now, assuming it is None
+                    [[obj_name_a, obj_name_out_a], [obj_name_b, obj_name_out_b]] = np.random.choice(object_mapping, 2,
+                                                                                                    replace=False)
+                    [[color_name_a, rgba_a], [color_name_b, rgba_b]] = np.random.choice(
+                        list(color_name_to_rgba.items()), 2, replace=False)
+                    if mutate_aspect != "shape":
+                        obj_name_b = obj_name_a
+                        obj_name_out_b = obj_name_out_b
+                    if mutate_aspect != "color":
+                        color_name_b = color_name_a
+                        rgba_b = rgba_a
+
+        # For cube, adjust the size a bit
+        if MAKEPAIRS == False:
+            if obj_name == 'Cube':
+                r /= math.sqrt(2)
+        else:
+            if obj_name_a == 'Cube':
+                r_a /= math.sqrt(2)
+            if obj_name_b == 'Cube':
+                r_b /= math.sqrt(2)
+
         # Choose random orientation for the object.
-        #theta = 360.0 * random.random()
+        theta = 360.0 * random.random()
 
         # Actually add the object to the scene
-        utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
-        obj = bpy.context.object
-        blender_objects.append(obj)
-        positions.append((x, y, r))
+        if not MAKEPAIRS:
+            utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+            obj = bpy.context.object
+            blender_objects.append(obj)
+            positions.append((x, y, r))
+        else:
+            utils.add_object(args.shape_dir, obj_name_a, r_a, (x, y), theta=theta)
+            obj_a = bpy.context.object
+            blender_objects_a.append(obj_a)
+            positions_a.append((x, y, r_a))
+
+            utils.add_object(args.shape_dir, obj_name_b, r_b, (x, y), theta=theta)
+            obj_b = bpy.context.object
+            blender_objects_b.append(obj_b)
+            positions_b.append((x, y, r_b))
 
         # Attach a random material
-        # mat_name, mat_name_out = random.choice(material_mapping)
-        utils.add_material(mat_name, Color=rgba)
+        if MAKEPAIRS == False:
+            mat_name, mat_name_out = random.choice(material_mapping)
+            utils.add_material(mat_name, Color=rgba)
+        elif i != mutate_object or mutate_aspect != "material":  # use same material
+            mat_name, mat_name_out = random.choice(material_mapping)
+            mat_name_a, mat_name_out_a = mat_name, mat_name_out
+            mat_name_b, mat_name_out_b = mat_name, mat_name_out
+            utils.add_material(mat_name_a, Color=rgba_a)
+            # utils.add_material(mat_name_b, Color=rgba_b)
+        else:  # use different materials
+            mat_name_a, mat_name_out_a, mat_name_b, mat_name_out_b = random.choice(material_mapping, 2, replace=False)
+            utils.add_material(mat_name_a, Color=rgba_a)
+            # utils.add_material(mat_name_b, Color=rgba_b)
 
         # Record data about the object in the scene data structure
-        pixel_coords = utils.get_camera_coords(camera, obj.location)
-        objects.append({
-            'shape': obj_name_out,
-            'size': size_name,
-            'material': mat_name_out,
-            '3d_coords': tuple(obj.location),
-            'rotation': theta,
-            'pixel_coords': pixel_coords,
-            'color': color_name,
-        })
+        if not MAKEPAIRS:
+            pixel_coords = utils.get_camera_coords(camera, obj.location)
+            objects.append({
+                'shape': obj_name_out,  # mutate
+                'size': size_name,
+                'material': mat_name_out,  # mutate
+                '3d_coords': tuple(obj.location),
+                'rotation': theta,
+                'pixel_coords': pixel_coords,
+                'color': color_name,  # mutate
+            })
+        else:
+            pixel_coords = utils.get_camera_coords(camera, obj_a.location)
+            objects_a.append({
+                'shape': obj_name_out_a,  # mutate
+                'size': size_name,
+                'material': mat_name_out_a,  # mutate
+                '3d_coords': tuple(obj_a.location),
+                'rotation': theta,
+                'pixel_coords': pixel_coords,
+                'color': color_name_a,  # mutate
+            })
+            objects_b.append({
+                'shape': obj_name_out_b,  # mutate
+                'size': size_name,
+                'material': mat_name_out_b,  # mutate
+                '3d_coords': tuple(obj_b.location),
+                'rotation': theta,
+                'pixel_coords': pixel_coords,
+                'color': color_name_b,  # mutate
+            })
 
     # Check that all objects are at least partially visible in the rendered image
-    all_visible = check_visibility(blender_objects, args.min_pixels_per_object)
+    if not MAKEPAIRS:
+        all_visible = check_visibility(blender_objects, args.min_pixels_per_object)
+    else:
+        all_visible_a = check_visibility(blender_objects_a, args.min_pixels_per_object)
+        all_visible_b = check_visibility(blender_objects_b, args.min_pixels_per_object)
+        if all_visible_a and all_visible_b:
+            all_visible = True
+        else:
+            all_visible = False
+
     if not all_visible:
         # If any of the objects are fully occluded then start over; delete all
         # objects from the scene and place them all again.
-        # print('Some objects are occluded; replacing objects')
-        # for obj in blender_objects:
-        #     utils.delete_object(obj)
-        # return add_random_objects(scene_struct, num_objects, args, camera)
-      print("not all visible")
-      return [], [], False
+        print('Some objects are occluded; replacing objects')
+        for obj in blender_objects:
+            utils.delete_object(obj)
+        return add_random_objects(scene_struct, num_objects, args, camera)
 
-    return objects, blender_objects, True
+    if not MAKEPAIRS:
+        return objects, blender_objects
+    else:
+        return objects_a, blender_objects_a, objects_b, blender_objects_b
 
 
 def compute_all_relationships(scene_struct, eps=0.2):
     """
-  Computes relationships between all pairs of objects in the scene.
+    Computes relationships between all pairs of objects in the scene.
 
-  Returns a dictionary mapping string relationship names to lists of lists of
-  integers, where output[rel][i] gives a list of object indices that have the
-  relationship rel with object i. For example if j is in output['left'][i] then
-  object j is left of object i.
-  """
+    Returns a dictionary mapping string relationship names to lists of lists of
+    integers, where output[rel][i] gives a list of object indices that have the
+    relationship rel with object i. For example if j is in output['left'][i] then
+    object j is left of object i.
+    """
     all_relationships = {}
     for name, direction_vec in scene_struct['directions'].items():
         if name == 'above' or name == 'below': continue
@@ -593,14 +721,15 @@ def compute_all_relationships(scene_struct, eps=0.2):
 
 def check_visibility(blender_objects, min_pixels_per_object):
     """
-  Check whether all objects in the scene have some minimum number of visible
-  pixels; to accomplish this we assign random (but distinct) colors to all
-  objects, and render using no lighting or shading or antialiasing; this
-  ensures that each object is just a solid uniform color. We can then count
-  the number of pixels of each color in the output image to check the visibility
-  of each object.
-  Returns True if all objects are visible and False otherwise.
-  """
+    Check whether all objects in the scene have some minimum number of visible
+    pixels; to accomplish this we assign random (but distinct) colors to all
+    objects, and render using no lighting or shading or antialiasing; this
+    ensures that each object is just a solid uniform color. We can then count
+    the number of pixels of each color in the output image to check the visibility
+    of each object.
+
+    Returns True if all objects are visible and False otherwise.
+    """
     f, path = tempfile.mkstemp(suffix='.png')
     object_colors = render_shadeless(blender_objects, path=path)
     img = bpy.data.images.load(path)
@@ -618,11 +747,11 @@ def check_visibility(blender_objects, min_pixels_per_object):
 
 def render_shadeless(blender_objects, path='flat.png'):
     """
-  Render a version of the scene with shading disabled and unique materials
-  assigned to all objects, and return a set of all colors that should be in the
-  rendered image. The image itself is written to path. This is used to ensure
-  that all objects will be visible in the final rendered scene.
-  """
+    Render a version of the scene with shading disabled and unique materials
+    assigned to all objects, and return a set of all colors that should be in the
+    rendered image. The image itself is written to path. This is used to ensure
+    that all objects will be visible in the final rendered scene.
+    """
     render_args = bpy.context.scene.render
 
     # Cache the render args we are about to clobber
